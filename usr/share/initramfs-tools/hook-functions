@@ -84,6 +84,13 @@ manual_add_modules()
 				"${CONFDIR}/modules"; then
 					echo "W: Possible missing firmware /lib/firmware/${firmware} for module $(basename ${mam_x} .ko)" >&2
 				fi
+
+				if grep -q "^$(basename "${mam_x}" .ko.gz)[[:space:]]" \
+				/proc/modules \
+				|| grep -q "^$(basename "${mam_x}" .ko.gz)" \
+				"${CONFDIR}/modules"; then
+					echo "W: Possible missing firmware /lib/firmware/${firmware} for module $(basename ${mam_x} .ko.gz)" >&2
+				fi
 				continue
 			fi
 
@@ -188,6 +195,10 @@ copy_modules_dir()
 	fi
 	for x_mod in $(find "${MODULESDIR}/${1}" -name '*.ko' -print); do
 		manual_add_modules $(basename ${x_mod} .ko)
+	done
+
+	for x_mod in $(find "${MODULESDIR}/${1}" -name '*.ko.gz' -print); do
+		manual_add_modules $(basename ${x_mod} .ko.gz)
 	done
 }
 
