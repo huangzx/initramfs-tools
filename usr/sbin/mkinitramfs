@@ -335,7 +335,7 @@ done
 
 # generate module deps
 depmod -a -b "${DESTDIR}" ${version}
-rm "${DESTDIR}"/lib/modules/${version}/modules.*map
+rm "${DESTDIR}"/lib/modules/${version}/modules.*map 2>/dev/null
 
 # Apply DSDT to initramfs
 if [ -e "${CONFDIR}/DSDT.aml" ]; then
