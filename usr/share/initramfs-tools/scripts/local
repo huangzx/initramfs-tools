@@ -100,18 +100,20 @@ able to reboot again and resume the installation.
 			panic "ALERT!  /host/${LOOP#/} does not exist.  Dropping to a shell!"
 		done
 
+		# Ylmf OS: fstype was replaced by blkid.
+		
 		# Get the loop filesystem type if not set
 		#if [ -z "${LOOPFSTYPE}" ]; then
 		#	eval $(fstype < "/host/${LOOP#/}")
 		#else
 		#	FSTYPE="${LOOPFSTYPE}"
 		#fi
+
 		#if [ "$FSTYPE" = "unknown" ] && [ -x /sbin/blkid ]; then
 		#	FSTYPE=$(/sbin/blkid -s TYPE -o value "/host/${LOOP#/}")
 		#	[ -z "$FSTYPE" ] && FSTYPE="unknown"
 		#fi
 		
-		#yaska: /bin/fstype mistake ext4 for ext3, we only use blkid now.
 		if [ -x /sbin/blkid ]; then
 			FSTYPE=$(/sbin/blkid -s TYPE -o value "/host/${LOOP#/}")
 			[ -z "$FSTYPE" ] && FSTYPE="unknown"

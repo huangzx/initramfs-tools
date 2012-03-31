@@ -187,11 +187,13 @@ for d in bin conf/conf.d etc lib/modules sbin scripts ${MODULESDIR}; do
 	mkdir -p "${DESTDIR}/${d}"
 done
 
-# Copy the modules.order file in
-if [ -f "${MODULESDIR}/modules.order" ]; then
-	cp -p "${MODULESDIR}/modules.order" \
-	      "${DESTDIR}${MODULESDIR}/modules.order"
-fi
+# Copy the modules.order modules.builtin file in
+for i in modules.order modules.builtin; do
+	if [ -f "${MODULESDIR}/${i}" ]; then
+		cp -p "${MODULESDIR}/${i}" \
+		      "${DESTDIR}${MODULESDIR}/${i}"
+	fi
+done
 
 # MODULES=list case.  Always honour.
 for x in "${CONFDIR}/modules" /usr/share/initramfs-tools/modules.d/*; do
