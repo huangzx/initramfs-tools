@@ -19,7 +19,7 @@ esac
 
 . /usr/share/initramfs-tools/hook-functions
 
-case "$DPKG_ARCH" in
+case "$PKG_ARCH" in
 # copy the right modules
 powerpc|ppc64)
 	# Add thermal control of Macintosh if the system is not a PS3

@@ -36,8 +36,8 @@ mount -t tmpfs -o "nosuid,size=20%,mode=0755" tmpfs /run
 mkdir /run/initramfs
 ln -s /run/initramfs /dev/.initramfs
 
-# Export the dpkg architecture
-export DPKG_ARCH=
+# Export the architecture
+export PKG_ARCH=
 . /conf/arch.conf
 
 # Set modprobe env

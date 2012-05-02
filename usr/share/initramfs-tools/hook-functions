@@ -435,14 +435,13 @@ EOF
 # minimal supported kernel version
 check_minkver()
 {
-	local curversion initdir DPKG_ARCH minversion cm_x tmp
+	local curversion initdir PKG_ARCH minversion cm_x tmp
 
 	curversion="${1}"
 	initdir="${2}"
 	if [ -z "${initdir}" ]; then
-		#DPKG_ARCH=$(dpkg --print-architecture)
-		DPKG_ARCH=$(uname -a |awk '{print $12}')
-		case ${DPKG_ARCH} in
+		PKG_ARCH=$(uname -r)
+		case ${PKG_ARCH} in
 			ia64|hppa)
 				minversion="2.6.15"
 			;;
@@ -450,11 +449,12 @@ check_minkver()
 				minversion="2.6.12"
 			;;
 		esac
-		#if dpkg --compare-versions "${curversion}" lt "${minversion}"; then
-		#	echo "W: kernel ${curversion} too old for initramfs on ${DPKG_ARCH}" >&2
-		#	echo "W: not generating requested initramfs for kernel ${curversion}" >&2
-		#	exit 2
-		#fi
+		ypkg --compare-version "${curversion}" "${minversion}" >/dev/null
+		if [ $? -eq 2 ]; then
+			echo "W: kernel ${curversion} too old for initramfs on ${PKG_ARCH}" >&2
+			echo "W: not generating requested initramfs for kernel ${curversion}" >&2
+			exit 2
+		fi
 		return 0
 	fi
 	set_initlist
@@ -464,10 +464,13 @@ check_minkver()
 		minver=$(sed '/^MINKVER=/!d;$!d;s/^MINKVER=//;s/[[:space:]]*$//' "${initdir}/${cm_x}")
 		if [ -z "${tmp}" ]; then
 			continue
-		#elif dpkg --compare-versions "${curversion}" lt "${minver}"; then
-		#	echo "W: ${cm_x} hook script requires at least kernel version ${minver}" >&2
-		#	echo "W: not generating requested initramfs for kernel ${curversion}" >&2
-		#	exit 2
+		else
+			ypkg --compare-version "${curversion}" "${minver}" >/dev/null
+			if [ $? -eq 2 ]; then
+				echo "W: ${cm_x} hook script requires at least kernel version ${minver}" >&2
+				echo "W: not generating requested initramfs for kernel ${curversion}" >&2
+				exit 2
+			fi
 		fi
 	done
 }

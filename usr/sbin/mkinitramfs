@@ -70,9 +70,11 @@ if [ -n "$supported_host_version" ] || [ -n "$supported_target_version" ]; then
 	fi
 	if [ -n "$supported_target_version" ]; then
 		target_upstream_version="${supported_target_version%%-*}"
-		#if dpkg --compare-versions "$target_upstream_version" lt "2.6.12"; then
-		#	exit 2
-		#fi
+		ypkg --compare-version "$target_upstream_version" "2.6.12" 2>/dev/null
+		#"$target_upstream_version" less than "2.6.12"
+		if [ $? -eq 2 ]; then
+			exit 2
+		fi
 	fi
 	echo "Depreciation warning: use ramdisk=mkinitramfs-kpkg."
 	exit 0
@@ -86,7 +88,7 @@ fi
 EXTRA_CONF=''
 for i in /usr/share/initramfs-tools/conf.d/* ${CONFDIR}/conf.d/*; do
 	EXTRA_CONF="${EXTRA_CONF} $(basename $i \
-		| grep '^[[:alnum:]][[:alnum:]\._-]*$' | grep -v '\.dpkg-.*$')";
+		| grep '^[[:alnum:]][[:alnum:]\._-]*$' | grep -v '\.pkg-.*$')";
 done
 # FIXME: deprecated those settings on mkinitramfs run
 #        these conf dirs are for boot scripts and land on initramfs
@@ -165,8 +167,7 @@ DESTDIR="$(mktemp -t -d mkinitramfs_XXXXXX)" || exit 1
 chmod 755 "${DESTDIR}"
 __TMPCPIOGZ="$(mktemp -t mkinitramfs-OL_XXXXXX)" || exit 1
 
-#DPKG_ARCH=`dpkg --print-architecture`
-DPKG_ARCH=$(uname -a |awk '{print $12}')
+PKG_ARCH=$(uname -r)
 
 # Export environment for hook scripts.
 #
@@ -174,7 +175,7 @@ export MODULESDIR
 export version
 export CONFDIR
 export DESTDIR
-export DPKG_ARCH
+export PKG_ARCH
 export verbose
 export KEYMAP
 export MODULES
@@ -255,7 +256,7 @@ for b in $(cd "${CONFDIR}/scripts" && find . \
 	cp -p "${CONFDIR}/scripts/${b}" "${DESTDIR}/scripts/$(dirname "${b}")/"
 done
 
-echo "DPKG_ARCH=${DPKG_ARCH}" > ${DESTDIR}/conf/arch.conf
+echo "PKG_ARCH=${PKG_ARCH}" > ${DESTDIR}/conf/arch.conf
 copy_exec "${CONFDIR}/initramfs.conf" /conf
 for i in ${EXTRA_CONF}; do
 	if [ -e "${CONFDIR}/conf.d/${i}" ]; then
@@ -320,7 +321,7 @@ fi
 copy_exec /sbin/blkid /sbin
 
 # workaround: libgcc always needed on old-abi arm
-if [ "$DPKG_ARCH" = arm ] || [ "$DPKG_ARCH" = armeb ]; then
+if [ "$PKG_ARCH" = arm ] || [ "$PKG_ARCH" = armeb ]; then
 	cp -a /lib/libgcc_s.so.1 "${DESTDIR}/lib/"
 fi
 

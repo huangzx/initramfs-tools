@@ -14,18 +14,6 @@ set -e
 
 [ -r ${CONF} ] && . ${CONF}
 
-if	   $USETRIGGERS						\
-	&& [ x"$DPKG_MAINTSCRIPT_PACKAGE" != x ]		\
-	&& [ $# = 1 ]	 					\
-	&& [ x"$1" = x-u ]					\
-	&& dpkg-trigger --check-supported 2>/dev/null
-then
-	if dpkg-trigger --no-await update-initramfs; then
-		echo "update-initramfs: deferring update (trigger activated)"
-		exit 0
-	fi
-fi
-
 usage()
 {
 	if [ -n "${1}" ]; then
@@ -100,7 +88,7 @@ set_initramfs()
 backup_initramfs()
 {
 	[ ! -r "${initramfs}" ] && return 0
-	initramfs_bak="${initramfs}.dpkg-bak"
+	initramfs_bak="${initramfs}.pkg-bak"
 	[ -r "${initramfs_bak}" ] && rm -f "${initramfs_bak}"
 	ln -f "${initramfs}" "${initramfs_bak}" \
 		|| cp -a "${initramfs}" "${initramfs_bak}"
@@ -110,7 +98,7 @@ backup_initramfs()
 # keep booted initramfs
 backup_booted_initramfs()
 {
-	initramfs_bak="${initramfs}.dpkg-bak"
+	initramfs_bak="${initramfs}.pkg-bak"
 
 	# first time run thus no backup
 	[ ! -r "${initramfs_bak}" ] && return 0
@@ -317,7 +305,9 @@ get_sorted_versions()
 		fi
 		worklist=""
 		for gsv_i in $version_list; do
-			if dpkg --compare-versions "${gsv_x}" '>' "${gsv_i}"; then
+			ypkg --compare-versions "${gsv_x}" "${gsv_i}" >/dev/null
+			# "${gsv_x}" > "${gsv_i}"
+			if [ $? -eq 1 ]; then
 				worklist="${worklist} ${gsv_x} ${gsv_i}"
 				gsv_x=""
 			else

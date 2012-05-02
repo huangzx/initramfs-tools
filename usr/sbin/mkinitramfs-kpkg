@@ -63,7 +63,9 @@ if [ -n "$supported_host_version" ] || [ -n "$supported_target_version" ]; then
 	fi
 	if [ -n "$supported_target_version" ]; then
 		target_upstream_version="${supported_target_version%%-*}"
-		if dpkg --compare-versions "$target_upstream_version" lt "2.6.12"; then
+		ypkg --compare-version "$target_upstream_version" "2.6.12" >/dev/null
+		# "$target_upstream_version" less than "2.6.12"
+		if [ $? -eq 2 ]; then
 			exit 2
 		fi
 	fi
