@@ -7,19 +7,25 @@ export PATH='/usr/bin:/sbin:/bin'
 keep="n"
 CONFDIR="/etc/initramfs-tools"
 verbose="n"
-errors_to="2>/dev/null"
-BUSYBOXDIR="/usr/lib/initramfs-tools/bin/"
-# BUSYBOXDIR="/bin"
 
-OPTIONS=`getopt -o d:ko:r:v --long supported-host-version:,supported-target-version: -n "$0" -- "$@"`
+test -e /bin/busybox && BUSYBOXDIR=/bin
+test -e /usr/lib/initramfs-tools/bin/busybox && BUSYBOXDIR=/usr/lib/initramfs-tools/bin
+export BUSYBOXDIR
+
+OPTIONS=`getopt -o c:d:ko:r:v -n "$0" -- "$@"`
 
 # Check for non-GNU getopt
-if [ $? != 0 ] ; then echo "Terminating..." >&2 ; exit 1 ; fi
+if [ $? != 0 ] ; then echo "W: non-GNU getopt" >&2 ; exit 1 ; fi
 
 eval set -- "$OPTIONS"
 
 while true; do
 	case "$1" in
+       -c)
+                compress="$2"
+                shift 2
+                ;;
+
 	-d)
 		CONFDIR="$2"
 		shift 2
@@ -44,14 +50,6 @@ while true; do
 		verbose="y"
 		shift
 		;;
-	--supported-host-version)
-		supported_host_version="$2"
-		shift 2
-		;;
-	--supported-target-version)
-		supported_target_version="$2"
-		shift 2
-		;;
 	--)
 		shift
 		break
@@ -63,23 +61,6 @@ while true; do
 	esac
 done
 
-# FIXME: remove after Lenny (needed for Etch linux-images)
-if [ -n "$supported_host_version" ] || [ -n "$supported_target_version" ]; then
-	if [ -n "$supported_host_version" ]; then
-		host_upstream_version="${supported_host_version%%-*}"
-	fi
-	if [ -n "$supported_target_version" ]; then
-		target_upstream_version="${supported_target_version%%-*}"
-		ypkg --compare-version "$target_upstream_version" "2.6.12" 2>/dev/null
-		#"$target_upstream_version" less than "2.6.12"
-		if [ $? -eq 2 ]; then
-			exit 2
-		fi
-	fi
-	echo "Depreciation warning: use ramdisk=mkinitramfs-kpkg."
-	exit 0
-fi
-
 # For dependency ordered mkinitramfs hook scripts.
 . /usr/share/initramfs-tools/scripts/functions
 . /usr/share/initramfs-tools/hook-functions
@@ -87,11 +68,12 @@ fi
 . "${CONFDIR}/initramfs.conf"
 EXTRA_CONF=''
 for i in /usr/share/initramfs-tools/conf.d/* ${CONFDIR}/conf.d/*; do
-	EXTRA_CONF="${EXTRA_CONF} $(basename $i \
-		| grep '^[[:alnum:]][[:alnum:]\._-]*$' | grep -v '\.pkg-.*$')";
+       [ -e $i ] && EXTRA_CONF="${EXTRA_CONF} $(basename $i \
+               | grep '^[[:alnum:]][[:alnum:]\._-]*$' | grep -v '\.dpkg-.*$')";
+
 done
 # FIXME: deprecated those settings on mkinitramfs run
-#        these conf dirs are for boot scripts and land on initramfs
+#       these conf dirs are for boot scripts and land on initramfs
 for i in ${EXTRA_CONF}; do
 	if [ -e  ${CONFDIR}/conf.d/${i} ]; then
 		. ${CONFDIR}/conf.d/${i}
@@ -107,7 +89,7 @@ for i in /usr/share/initramfs-tools/conf-hooks.d/*; do
 	fi
 done
 
-if [ -n "${UMASK}" ]; then
+if [ -n "${UMASK:-}" ]; then
 	umask "${UMASK}"
 fi
 
@@ -148,24 +130,53 @@ case "${version}" in
 	;;
 esac
 
+# Check userspace and kernel support for compressed initramfs images
+if [ -z "${compress:-}" ]; then
+       compress=${COMPRESS}
+else
+       COMPRESS=${compress}
+fi
+
+if ! command -v "${compress}" >/dev/null 2>&1; then
+       compress=gzip
+       [ "${verbose}" = y ] && \
+               echo "No ${COMPRESS} in ${PATH}, using gzip"
+       COMPRESS=gzip
+fi
+
+if ! `grep -q -i ^config_rd_${COMPRESS%p} /boot/config-${version}` ; then
+       compress=gzip
+       [ "${verbose}" = y ] && \
+               echo "linux-2.6 misses ${COMPRESS} support, using gzip"
+fi
+
+[ "${compress}" = lzop ] && compress="lzop -9"
+[ "${compress}" = xz ] && compress="xz -8 --check=crc32"
+
 if [ -d "${outfile}" ]; then
-	echo "${outfile} is a directory"
+	echo "${outfile} is a directory" >&2
 	exit 1
 fi
 
 MODULESDIR="/lib/modules/${version}"
 
 if [ ! -e "${MODULESDIR}" ]; then
-	echo "Cannot find ${MODULESDIR}"
-	exit 1
+	echo "WARNING: missing ${MODULESDIR}"
+	echo "Device driver support needs thus be built-in linux image!"
 fi
 if [ ! -e "${MODULESDIR}/modules.dep" ]; then
 	depmod ${version}
 fi
 
-DESTDIR="$(mktemp -t -d mkinitramfs_XXXXXX)" || exit 1
+DESTDIR="$(mktemp -d ${TMPDIR:-/tmp}/mkinitramfs_XXXXXX)" || exit 1
 chmod 755 "${DESTDIR}"
-__TMPCPIOGZ="$(mktemp -t mkinitramfs-OL_XXXXXX)" || exit 1
+# do not execute cache_run_scripts() if mounted with noexec
+NOEXEC=""
+fs=$(df -P $DESTDIR | tail -1 | awk '{print $6}')
+if [ -n "$fs" ] && mount | grep -q "on $fs .*noexec" ; then
+       NOEXEC=1
+fi
+__TMPCPIOGZ="$(mktemp ${TMPDIR:-/tmp}/mkinitramfs-OL_XXXXXX)" || exit 1
 
 PKG_ARCH=$(uname -r)
 
@@ -177,14 +188,14 @@ export CONFDIR
 export DESTDIR
 export PKG_ARCH
 export verbose
-export KEYMAP
 export MODULES
+export BUSYBOX
 export COMPCACHE_SIZE
 
 # Private, used by 'catenate_cpiogz'.
 export __TMPCPIOGZ
 
-for d in bin conf/conf.d etc lib/modules sbin scripts ${MODULESDIR}; do
+for d in bin conf/conf.d etc lib/modules run sbin scripts ${MODULESDIR}; do
 	mkdir -p "${DESTDIR}/${d}"
 done
 
@@ -219,25 +230,20 @@ list)
 	# nothing to add
 	;;
 *)
-	echo "mkinitramfs: Warning unsupported MODULES setting: ${MODULES}."
-	echo "mkinitramfs: Falling back to MODULES=most."
+	echo "W: mkinitramfs: unsupported MODULES setting: ${MODULES}."
+	echo "W: mkinitramfs: Falling back to MODULES=most."
 	auto_add_modules
 	;;
 esac
 
-# Have to do each file, because cpio --dereference doesn't recurse down
-# symlinks.
+# Resolve hidden dependencies
+hidden_dep_add_modules
 
-# klibc
-ln -s /usr/lib/klibc/bin/* ${DESTDIR}/bin
-ln -s /lib/klibc-*.so ${DESTDIR}/lib
-rm -f ${DESTDIR}/bin/kinit* ${DESTDIR}/bin/gzip
-
-copy_exec /usr/share/initramfs-tools/init /init
+cp -p /usr/share/initramfs-tools/init ${DESTDIR}/init
 
 # add existant boot scripts
 for b in $(cd /usr/share/initramfs-tools/scripts/ && find . \
-	-regextype posix-extended -regex '.*/[[:alnum:]_]+$' -type f); do
+	-regextype posix-extended -regex '.*/[[:alnum:]\._-]+$' -type f); do
 	option=$(sed '/^OPTION=/!d;$d;s/^OPTION=//;s/[[:space:]]*$//' "/usr/share/initramfs-tools/scripts/${b}")
 	[ -z "${option}" ] || eval test -n \"\${$option}\" -a \"\${$option}\" != \"n\" || continue
 
@@ -247,7 +253,7 @@ for b in $(cd /usr/share/initramfs-tools/scripts/ && find . \
 		"${DESTDIR}/scripts/$(dirname "${b}")/"
 done
 for b in $(cd "${CONFDIR}/scripts" && find . \
-	-regextype posix-extended -regex '.*/[[:alnum:]_]+$' -type f); do
+	-regextype posix-extended -regex '.*/[[:alnum:]\._-]+$' -type f); do
 	option=$(sed '/^OPTION=/!d;$d;s/^OPTION=//;s/[[:space:]]*$//' "${CONFDIR}/scripts/${b}")
 	[ -z "${option}" ] || eval test -n \"\${$option}\" -a \"\${$option}\" != \"n\" || continue
 
@@ -257,7 +263,8 @@ for b in $(cd "${CONFDIR}/scripts" && find . \
 done
 
 echo "PKG_ARCH=${PKG_ARCH}" > ${DESTDIR}/conf/arch.conf
-copy_exec "${CONFDIR}/initramfs.conf" /conf
+cp -p "${CONFDIR}/initramfs.conf" ${DESTDIR}/conf
+
 for i in ${EXTRA_CONF}; do
 	if [ -e "${CONFDIR}/conf.d/${i}" ]; then
 		copy_exec "${CONFDIR}/conf.d/${i}" /conf/conf.d
@@ -267,55 +274,22 @@ for i in ${EXTRA_CONF}; do
 done
 
 # ROOT hardcoding
-if [ -n "${ROOT}" ]; then
+if [ -n "${ROOT:-}" ]; then
 	echo "ROOT=${ROOT}" > ${DESTDIR}/conf/conf.d/root
 fi
 
-# Busybox
-if [ "${BUSYBOX}" = "n" ] || [ ! -e ${BUSYBOXDIR}/busybox ]; then
-	mv ${DESTDIR}/bin/sh.shared ${DESTDIR}/bin/sh
-	# those root need busybox
-	eval "$(mount | awk '/ \/ / {print "r_dev=" $1; exit}')"
-	if [ "${r_dev#/dev/mapper/}" != "${r_dev}" ] \
-		|| [ "${r_dev#/dev/md}" != "${r_dev}" ]; then
-		echo "Warning: Busybox is required for successful boot!"
-	fi
-else
-	# Busybox is configured to prefer its own applets, so remove
-	# duplication from klibc.
-	for cmd in `${BUSYBOXDIR}/busybox | sed -n '/functions:$/,$p' \
-		| tail -n +2 \
-		| sed -e 's/[[:space:]]*//g; s/,$//; s/,/\n/g; /busybox/d'`; do
-		rm -f ${DESTDIR}/bin/${cmd}
-	done
-	rm -f ${DESTDIR}/bin/sh
-	rm -f ${DESTDIR}/bin/busybox
-	copy_exec ${BUSYBOXDIR}/busybox /bin/busybox
-	ln -s ${BUSYBOXDIR}/busybox ${DESTDIR}/bin/sh
-	# klibc's version is just wrong; patch sent upstream by maks
-	rm -f ${DESTDIR}/bin/chroot
-	# klibc's version can't display mounts, which casper needs; fuse
-	# needs /bin/mount to exist, so add a symlink
-	rm -f ${DESTDIR}/bin/mount
-	ln -s busybox ${DESTDIR}/bin/mount
-	# ... but some scripts expect /bin/sleep to exist. Boo.
-	ln -s busybox ${DESTDIR}/bin/sleep
-	# Useless
-	for cmd in minips nuke sh.shared; do
-		rm -f ${DESTDIR}/bin/${cmd}
-	done
+if ! command -v ldd >/dev/null 2>&1 ; then
+       echo "WARNING: no ldd around - install libc-bin" >&2
+       exit 1
 fi
 
 copy_exec /usr/lib/initramfs-tools/bin/wait-for-root /sbin
 
-# Modutils
+# module-init-tools
 copy_exec /sbin/modprobe /sbin
-copy_exec /sbin/depmod /sbin
 copy_exec /sbin/rmmod /sbin
-mkdir -p "/etc/modprobe.d" "${DESTDIR}/etc/modprobe.d"
-if ls /etc/modprobe.d/* >/dev/null 2>/dev/null;then
-	cp -a /etc/modprobe.d/* "${DESTDIR}/etc/modprobe.d/"
-fi
+mkdir -p "${DESTDIR}/etc/modprobe.d"
+cp -a /etc/modprobe.d/* "${DESTDIR}/etc/modprobe.d/"
 
 # util-linux
 copy_exec /sbin/blkid /sbin
@@ -328,15 +302,25 @@ fi
 run_scripts /usr/share/initramfs-tools/hooks optional
 run_scripts "${CONFDIR}"/hooks optional
 
-# cache run order
-for b in $(cd "${DESTDIR}/scripts" && find . \
-	-mindepth 1 -type d); do
-	cache_run_scripts "${DESTDIR}" "/scripts/${b#./}"
-done
+# cache boot run order
+if [ -n "$NOEXEC" ]; then
+       echo "W: TMPDIR is mounted noexec, will not cache run scripts."
+else
+       for b in $(cd "${DESTDIR}/scripts" && find . -mindepth 1 -type d); do
+               cache_run_scripts "${DESTDIR}" "/scripts/${b#./}"
+       done
+fi
 
 # generate module deps
 depmod -a -b "${DESTDIR}" ${version}
-rm "${DESTDIR}"/lib/modules/${version}/modules.*map 2>/dev/null
+rm -f "${DESTDIR}/lib/modules/${version}"/modules.*map
+
+# make sure that library search path is up to date
+cp -ar /etc/ld.so.conf* "$DESTDIR"/etc/
+if ! ldconfig -r "$DESTDIR" ; then
+       [ $(id -u) != "0" ] \
+       && echo "ldconfig might need uid=0 (root) for chroot()" >&2
+fi
 
 # Apply DSDT to initramfs
 if [ -e "${CONFDIR}/DSDT.aml" ]; then
@@ -344,7 +328,21 @@ if [ -e "${CONFDIR}/DSDT.aml" ]; then
 fi
 
 # Remove any looping or broken symbolic links, since they break cpio.
-(cd "${DESTDIR}" && find . -type l -printf '%p %Y\n' | sed -n 's/ [LN]$//p' | xargs -rL1 rm -f)
+[ "${verbose}" = y ] && xargs_verbose="-t"
+(cd "${DESTDIR}" && find . -type l -printf '%p %Y\n' | sed -n 's/ [LN]$//p' \
+       | xargs ${xargs_verbose:-} -rL1 rm -f)
+
+# dirty hack for armhf's double-linker situation; if we have one of
+# the two known eglibc linkers, nuke both and re-create sanity
+if [ "$DPKG_ARCH" = armhf ]; then
+       if [ -e "${DESTDIR}/lib/arm-linux-gnueabihf/ld-linux.so.3" ] || \
+          [ -e "${DESTDIR}/lib/ld-linux-armhf.so.3" ]; then
+               rm -f "${DESTDIR}/lib/arm-linux-gnueabihf/ld-linux.so.3"
+               rm -f "${DESTDIR}/lib/ld-linux-armhf.so.3"
+               cp -aL /lib/ld-linux-armhf.so.3 "${DESTDIR}/lib/"
+               ln -sf /lib/ld-linux-armhf.so.3 "${DESTDIR}/lib/arm-linux-gnueabihf/ld-linux.so.3"
+       fi
+fi
 
 [ "${verbose}" = y ] && echo "Building cpio ${outfile} initramfs"
 (
@@ -354,19 +352,28 @@ fi
 # cd "${DESTDIR}" && find . | cpio --quiet --dereference -o -H newc | lzma -7 >"${outfile}"
 exec 3>&1
 eval `
-    # http://cfaj.freeshell.org/shell/cus-faq-2.html
-    exec 4>&1 >&3 3>&-
-    cd  "${DESTDIR}" 
-    {
-        find . 4>&-; echo "ec1=$?;" >&4
-    } | {
-        cpio --quiet --dereference -o -H newc 4>&-; echo "ec2=$?;" >&4
-    } | lzma -7 >"${outfile}"
-    echo "ec3=$?;" >&4
+      # http://cfaj.freeshell.org/shell/cus-faq-2.html
+      exec 4>&1 >&3 3>&-
+      cd  "${DESTDIR}"
+      {
+              find . 4>&-; echo "ec1=$?;" >&4
+      } | {
+              cpio --quiet -R 0:0 -o -H newc 4>&-; echo "ec2=$?;" >&4
+      } | ${compress} >"${outfile}"
+      echo "ec3=$?;" >&4
 `
-if [ "$ec1" -ne 0 ]; then exit "$ec1"; fi
-if [ "$ec2" -ne 0 ]; then exit "$ec2"; fi
-if [ "$ec3" -ne 0 ]; then exit "$ec3"; fi
+if [ "$ec1" -ne 0 ]; then
+       echo "E: mkinitramfs failure find $ec1 cpio $ec2 $compress $ec3"
+       exit "$ec1"
+fi
+if [ "$ec2" -ne 0 ]; then
+       echo "E: mkinitramfs failure cpio $ec2 $compress $ec3"
+       exit "$ec2"
+fi
+if [ "$ec3" -ne 0 ]; then
+       echo "E: mkinitramfs failure $compress $ec3"
+       exit "$ec3"
+fi
 ) || exit 1
 
 if [ -s "${__TMPCPIOGZ}" ]; then

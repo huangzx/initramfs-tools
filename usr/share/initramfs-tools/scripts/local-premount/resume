@@ -15,8 +15,6 @@ prereqs)
 	;;
 esac
 
-. ./scripts/functions
-
 if [ -z "${resume}" ]; then
 	exit 0
 fi
@@ -27,8 +25,8 @@ LABEL=*)
 
 	# support any / in LABEL= path (escape to \x2f)
 	case "${resume}" in
-	*[/]*)
-		if [ -x "$(command -v sed)" ]; then
+	*/*)
+		if  command -v sed >/dev/null 2>&1; then
 			resume="$(echo ${resume} | sed 's,/,\\x2f,g')"
 		else
 			if [ "${resume}" != "${resume#/}" ]; then
@@ -40,11 +38,7 @@ LABEL=*)
 			IFS='/'
 			newresume=
 			for s in $resume; do
-				if [ -z "${newresume}" ]; then
-					newresume="${s}"
-				else
-					newresume="${newresume}\\x2f${s}"
-				fi
+				newresume="${newresume:+${newresume}\\x2f}${s}"
 			done
 			unset IFS
 			resume="${newresume}"
@@ -67,9 +61,9 @@ case "${SWAPTYPE}" in
 
 	# hardcode path, uswsusp ships an resume binary too
 	if [ -n "${resume_offset}" ]; then
-		/bin/resume ${resume} ${resume_offset} >/dev/null 2>&1
+		/bin/resume ${resume} ${resume_offset}
 	else
-		/bin/resume ${resume} >/dev/null 2>&1
+		/bin/resume ${resume}
 	fi
 	;;
 esac

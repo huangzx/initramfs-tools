@@ -1,14 +1,26 @@
 # Local filesystem mounting			-*- shell-script -*-
 
-# Parameter: Where to mount the filesystem
-mountroot ()
+pre_mountroot()
 {
 	[ "$quiet" != "y" ] && log_begin_msg "Running /scripts/local-top"
 	run_scripts /scripts/local-top
 	[ "$quiet" != "y" ] && log_end_msg
 
+	# Don't wait for a root device that doesn't have a corresponding
+	# device in /dev (ie, mtd0)
+	if [ "${ROOT#/dev}" = "${ROOT}" ]; then
+		return
+	fi
+
 	while [ -z "${FSTYPE}" ]; do
 		FSTYPE=$(wait-for-root "${ROOT}" ${ROOTDELAY:-30})
+
+		# Load ubi with the correct MTD partition and return since
+		# fstype doesn't work with a char device like ubi.
+		if [ -n "$UBIMTD" ]; then
+			modprobe ubi mtd=$UBIMTD
+			return
+		fi
 
 		# Run failure hooks, hoping one of them can fix up the system
 		# and we can restart the wait loop.  If they all fail, abort
@@ -46,20 +58,25 @@ mountroot ()
 		echo " - Missing modules (cat /proc/modules; ls /dev)"
 		panic "ALERT!  ${ROOT} does not exist.  Dropping to a shell!"
 	done
+}
+
+mountroot()
+{
+	pre_mountroot
 
 	# Get the root filesystem type if not set
 	if [ -z "${ROOTFSTYPE}" ]; then
-		[ -n "${FSTYPE}" ] || FSTYPE=$(/sbin/blkid -s TYPE -o value "${ROOT}")
+		[ -n "${FSTYPE}" ] || FSTYPE=$(blkid -s TYPE -o value "${ROOT}")
 		ROOTFSTYPE="${FSTYPE}"
 	else
-		FSTYPE="${ROOTFSTYPE}"
+		FSTYPE=${ROOTFSTYPE}
 	fi
 
 	[ "$quiet" != "y" ] && log_begin_msg "Running /scripts/local-premount"
 	run_scripts /scripts/local-premount
 	[ "$quiet" != "y" ] && log_end_msg
 
-	if [ ${readonly} = y ] && \
+	if [ "${readonly}" = "y" ] && \
 	   [ -z "$LOOP" ]; then
 		roflag=-r
 	else
@@ -71,11 +88,7 @@ mountroot ()
 
 	# FIXME This has no error checking
 	# Mount root
-	if [ ${FSTYPE} = ntfs ];then
-		ntfs-3g ${ROOT} ${rootmnt} -o force,rw
-	else
-		mount ${roflag} ${FSTYPE:+-t ${FSTYPE} }${ROOTFLAGS} ${ROOT} ${rootmnt}
-	fi
+	mount ${roflag} ${FSTYPE:+-t ${FSTYPE} }${ROOTFLAGS} ${ROOT} ${rootmnt}
 	mountroot_status="$?"
 	if [ "$LOOP" ]; then
 		if [ "$mountroot_status" != 0 ]; then
@@ -100,25 +113,18 @@ able to reboot again and resume the installation.
 			panic "ALERT!  /host/${LOOP#/} does not exist.  Dropping to a shell!"
 		done
 
-		# Ylmf OS: fstype was replaced by blkid.
-		
 		# Get the loop filesystem type if not set
-		#if [ -z "${LOOPFSTYPE}" ]; then
-		#	eval $(fstype < "/host/${LOOP#/}")
-		#else
-		#	FSTYPE="${LOOPFSTYPE}"
-		#fi
-
-		#if [ "$FSTYPE" = "unknown" ] && [ -x /sbin/blkid ]; then
-		#	FSTYPE=$(/sbin/blkid -s TYPE -o value "/host/${LOOP#/}")
-		#	[ -z "$FSTYPE" ] && FSTYPE="unknown"
-		#fi
+		if [ -z "${LOOPFSTYPE}" ]; then
+			eval $(fstype < "/host/${LOOP#/}")
+		else
+			FSTYPE="${LOOPFSTYPE}"
+		fi
 		
-		if [ -x /sbin/blkid ]; then
+		if [ "$FSTYPE" = "unknown" ] && [ -x /sbin/blkid ]; then
 			FSTYPE=$(/sbin/blkid -s TYPE -o value "/host/${LOOP#/}")
 			[ -z "$FSTYPE" ] && FSTYPE="unknown"
 		fi
-
+ 
 		if [ ${readonly} = y ]; then
 			roflag=-r
 		else
@@ -132,16 +138,13 @@ able to reboot again and resume the installation.
 		# FIXME This has no error checking
 		mount ${roflag} -o loop -t ${FSTYPE} ${LOOPFLAGS} "/host/${LOOP#/}" ${rootmnt}
 
-		# Delete dirs that osinstaller created at wubi installing
-		ls ${rootmnt}/isodevice/* >/dev/null 2>&1 || rm -rf ${rootmnt}/isodevice
-		ls ${rootmnt}/cdrom/*     >/dev/null 2>&1 || rm -rf ${rootmnt}/cdrom
-
 		if [ -d ${rootmnt}/host ]; then
 			mount -o move /host ${rootmnt}/host
 		fi
 	fi
-
+	
 	[ "$quiet" != "y" ] && log_begin_msg "Running /scripts/local-bottom"
 	run_scripts /scripts/local-bottom
 	[ "$quiet" != "y" ] && log_end_msg
 }
+

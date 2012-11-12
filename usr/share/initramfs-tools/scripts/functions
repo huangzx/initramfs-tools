@@ -3,38 +3,32 @@
 _log_msg()
 {
 	if [ "$quiet" = "y" ]; then return; fi
-	echo "$@"
+	printf "$@"
 }
 
 log_success_msg()
 {
-	_log_msg "Success: $@"
+	_log_msg "Success: $@\n"
 }
 
 log_failure_msg()
 {
-	_log_msg "Failure: $@"
+	_log_msg "Failure: $@\n"
 }
 
 log_warning_msg()
 {
-	_log_msg "Warning: $@"
+	_log_msg "Warning: $@\n"
 }
 
 log_begin_msg()
 {
-	if [ -x /sbin/usplash_write ]; then
-		/sbin/usplash_write "TEXT $@"
-	fi
-	_log_msg "Begin: $@ ..."
+	_log_msg "Begin: $@ ... "
 }
 
 log_end_msg()
 {
-	if [ -x /sbin/usplash_write ]; then
-		/sbin/usplash_write "SUCCESS ok"
-	fi
-	_log_msg "Done."
+	_log_msg "done.\n"
 }
 
 # Add failure hook
@@ -62,6 +56,10 @@ try_failure_hooks()
 	fi
 	chvt 1
 
+	if [ -x /bin/plymouth ] && plymouth --ping; then
+		/bin/plymouth hide-splash > /dev/null 2>&1
+	fi
+
 	for hook in /tmp/mountroot-fail-hooks.d/*; do
 		if [ -x ${hook} ] && ${hook} mountfail; then
 			return 0
@@ -72,13 +70,15 @@ try_failure_hooks()
 
 panic()
 {
-	if [ -x /sbin/usplash_write ]; then
-		/sbin/usplash_write "QUIT"
-	fi
-	chvt 1
+       if command -v chvt >/dev/null 2>&1; then
+               chvt 1
+       fi
+
+	echo "$@"
 
 	# Disallow console access
 	if [ -n "${panic}" ]; then
+		echo "Rebooting automatically due to panic= boot argument"
 		sleep ${panic}
 		reboot
 	fi
@@ -87,14 +87,13 @@ panic()
 	modprobe atkbd
 
 	run_scripts /scripts/panic
-
-	echo $@
-	PS1='(initramfs) ' /bin/sh -i </dev/console >/dev/console 2>&1
+	
+	REASON="$@" PS1='(initramfs) ' /bin/sh -i </dev/console >/dev/console 2>&1
 }
 
 maybe_break()
 {
-	if echo "${break}" | egrep -q "(,|^)$1(,|$)"; then
+	if echo "${break:-}" | egrep -q "(,|^)$1(,|$)"; then
 		panic "Spawning shell within the initramfs"
 	fi
 }
@@ -113,7 +112,7 @@ set_initlist()
 
 		# only allow variable name chars
 		case ${si_x#${initdir}/} in
-		*[![:alnum:]_]*)
+		*[![:alnum:]\._-]*)
 			[ "${verbose}" = "y" ] \
 			&& echo "$si_x ignored: not alphanumeric or '_' file"
 			continue
@@ -134,7 +133,14 @@ set_initlist()
 			continue
 		fi
 
-		initlist="${initlist} ${si_x#${initdir}/}"
+		# skip bad syntax
+		if ! sh -n ${si_x} ; then
+			[ "${verbose}" = "y" ] \
+			&& echo "$si_x ignored: bad syntax"
+			continue
+		fi
+		
+		initlist="${initlist:-} ${si_x#${initdir}/}"
 	done
 }
 
@@ -152,7 +158,8 @@ reduce_satisfied()
 				IFS="$OLD_IFS"
 				# only allow variable name chars
 				case ${rs_z} in
-				*[![:alnum:]_]*)
+				*[![:alnum:]\._-]*)
+
 						IFS="|"
 						continue
 						;;
@@ -167,23 +174,33 @@ reduce_satisfied()
 					IFS="|"
 					continue
 				fi
+				
+				# skip bad syntax
+				if ! sh -n ${initdir}/${rs_z}; then
+					IFS="|"
+				        continue
+				fi
+
 				tmpdeplist="${tmpdeplist} ${rs_z}"
 				break
 			done
 			IFS="$OLD_IFS"
 			;;
 		*)
+			# only allow variable name chars
 			case ${rs_y} in
-			*[![:alnum:]_]*)
+			*[![:alnum:]\._-]*)
 				continue
 				;;
 			esac
-			if [ ! -x ${initdir}/${rs_y} ]; then
-				continue
-			fi
-			if [ -d ${initdir}/${rs_y} ]; then
-				continue
-			fi
+			
+			# skip non executable scripts
+			[ ! -x ${initdir}/${rs_y} ] && continue
+			# skip directories
+			[ -d ${initdir}/${rs_y} ] && continue
+			# skip bad syntax
+			sh -n ${initdir}/${rs_y} || continue
+			
 			tmpdeplist="${tmpdeplist} ${rs_y}"
 			;;
 		esac
@@ -257,7 +274,7 @@ reduce_prereqs()
 get_prereq_pairs()
 {
 	set_initlist
-	for gp_x in ${initlist}; do
+	for gp_x in ${initlist:-}; do
 		echo ${gp_x} ${gp_x}
 		prereqs=$(${initdir}/${gp_x} prereqs)
 		for prereq in ${prereqs}; do
@@ -268,6 +285,7 @@ get_prereq_pairs()
 
 call_scripts()
 {
+	set -e
 	for cs_x in ${runlist}; do
 		[ -f ${initdir}/${cs_x} ] || continue
 		if [ x"$1" = "xoptional" ]; then
@@ -279,12 +297,24 @@ call_scripts()
 		if [ "${verbose}" = "y" ]; then
 			echo "Calling hook ${cs_x}"
 		fi
-		${initdir}/${cs_x}
-		# allow boot scripts to modify exported boot paramaters
-		if [ -e /conf/param.conf ]; then
+
+               ${initdir}/${cs_x} && ec=$? || ec=$?
+               # allow hooks to abort build:
+               # (except for iscan, due to a widely-deployed third-party
+               # package causing upgrade problems)
+               if [ "$ec" -ne 0 ] && [ "${cs_x}" != iscan ] && \
+                  [ "${cs_x}" != iscan-data ]; then
+                       echo "E: ${initdir}/${cs_x} failed with return $ec."
+                       # only errexit on mkinitramfs
+                       [ -n "${version}" ] && exit $ec
+               fi
+               # allow boot scripts to modify exported boot parameters
+
+	       if [ -e /conf/param.conf ]; then
 			. /conf/param.conf
-		fi
+	       fi
 	done
+	set +e
 }
 
 run_scripts()
@@ -294,29 +324,14 @@ run_scripts()
 
 	if [ -f ${initdir}/ORDER ]; then
 		. ${initdir}/ORDER
-	elif [ -x /usr/bin/tsort ]; then
+	elif command -v tsort >/dev/null 2>&1; then	
 		runlist=$(get_prereq_pairs | tsort)
-		call_scripts $2
+		call_scripts ${2:-}
 	else
 		get_prereqs
 		reduce_prereqs
 		call_scripts $2
 	fi
-}
-
-cache_run_scripts()
-{
-	DESTDIR=${1}
-	scriptdir=${2}
-	initdir=${DESTDIR}${scriptdir}
-	[ ! -d ${initdir} ] && return
-
-	runlist=$(get_prereq_pairs | tsort)
-	for crs_x in ${runlist}; do
-		[ -f ${initdir}/${crs_x} ] || continue
-		echo "${scriptdir}/${crs_x}" >> ${initdir}/ORDER
-		echo "[ -e /conf/param.conf ] && . /conf/param.conf" >> ${initdir}/ORDER
-	done
 }
 
 # Load custom modules first
@@ -347,74 +362,153 @@ parse_numeric() {
 	/*)
 		return
 		;;
-	*:*)
-		minor=${1#*:}
-		major=${1%:*}
-		;;
-	*)
+       [0-9]*:[0-9]*)
+               minor=$(echo ${1#*:} | sed -e 's/^0*//')
+               major=$(echo ${1%:*} | sed -e 's/^0*//')
+       ;;
+       [A-Fa-f0-9]*)
 		value=$(( 0x${1} ))
 		minor=$(( ${value} % 256 ))
 		major=$(( ${value} / 256 ))
 		;;
+       *)
+               return
+               ;;
 	esac
 
-	mknod -m 600 /dev/root b ${major} ${minor}
-	ROOT=/dev/root
+       if command -v udevd >/dev/null 2>&1; then
+               ROOT=/dev/block/${major}:${minor}
+       else
+               mknod -m 600 /dev/root b ${major} ${minor}
+               ROOT=/dev/root
+       fi
+}
+
+# Parameter: device node to check
+# Echos fstype to stdout
+# Return value: indicates if an fs could be recognized
+get_fstype ()
+{
+       local FS FSTYPE FSSIZE RET
+       FS="${1}"
+
+       # blkid has a more complete list of file systems,
+       # but fstype is more robust
+       eval $(fstype "${FS}" 2> /dev/null)
+       if [ "$FSTYPE" = "unknown" ] &&  command -v blkid >/dev/null 2>&1 ; then
+               FSTYPE=$(blkid -o value -s TYPE "${FS}")
+       elif [ "$FSTYPE" = "unknown" ] && [ -x /lib/udev/vol_id ]; then
+               FSTYPE=$(/lib/udev/vol_id -t "${FS}" 2> /dev/null)
+       fi
+       RET=$?
+
+       if [ -z "${FSTYPE}" ]; then
+               FSTYPE="unknown"
+       fi
+
+       echo "${FSTYPE}"
+       return ${RET}
 }
 
 configure_networking()
 {
-	# networking already configured thus bail out
-	[ -n "${DEVICE}" ] && [ -e /tmp/net-"${DEVICE}".conf ] && return 0
+       if [ -n "${BOOTIF}" ]; then
+               # pxelinux sets BOOTIF to a value based on the mac address of the
+               # network card used to PXE boot, so use this value for DEVICE rather
+               # than a hard-coded device name from initramfs.conf. this facilitates
+               # network booting when machines may have multiple network cards.
+               # pxelinux sets BOOTIF to 01-$mac_address
 
-	if [ "${HWADDR}" ]; then
-		# select interface by MAC address
-		HWADDR="$(echo "${HWADDR}" | tr A-Z- a-z:)"
-		local iface
-		for iface in /sys/class/net/*; do
-			[ -f "$iface/address" ] || continue
-			if [ "$(cat "$iface/address")" = "${HWADDR}" ]; then
-				DEVICE="${iface#/sys/class/net/}"
+               # strip off the leading "01-", which isn't part of the mac
+               # address
+               temp_mac=${BOOTIF#*-}
+
+               # convert to typical mac address format by replacing "-" with ":"
+               bootif_mac=""
+               IFS='-'
+               for x in $temp_mac ; do
+                       if [ -z "$bootif_mac" ]; then
+                               bootif_mac="$x"
+                       else
+                               bootif_mac="$bootif_mac:$x"
+                       fi
+               done
+               unset IFS
+
+               # look for devices with matching mac address, and set DEVICE to
+               # appropriate value if match is found.
+               for device in /sys/class/net/* ; do
+                        if [ -f "$device/address" ]; then
+                               current_mac=$(cat "$device/address")
+                               if [ "$bootif_mac" = "$current_mac" ]; then
+                                       DEVICE=${device##*/}
+                                       break
+                               fi
+
 			fi
 		done
 	fi
+	
+	# networking already configured thus bail out
+	[ -n "${DEVICE}" ] && [ -e /tmp/net-"${DEVICE}".conf ] && return 0
 
 	# support ip options see linux sources
-	# Documentation/filesystems/nfsroot.txt
-	case ${IPOPTS} in
-	none|off)
-		# Do nothing
-		;;
-	""|on|any)
-		# Bring up device
-		ipconfig -t 60 ${DEVICE}
-		;;
-	dhcp|bootp|rarp|both)
-		ipconfig -t 60 -c ${IPOPTS} -d ${DEVICE}
-		;;
-	*)
-		ipconfig -t 60 -d $IPOPTS
+	# Documentation/filesystems/nfs/nfsroot.txt
+	# Documentation/frv/booting.txt
+       for ROUNDTTT in 2 3 4 6 9 16 25 36 64 100; do
 
-		# grab device entry from ip option
-		NEW_DEVICE=${IPOPTS#*:*:*:*:*:*}
-		if [ "${NEW_DEVICE}" != "${IPOPTS}" ]; then
-			NEW_DEVICE=${NEW_DEVICE%:*}
-		else
-			# wrong parse, possibly only a partial string
-			NEW_DEVICE=
-		fi
-		if [ -n "${NEW_DEVICE}" ]; then
-			DEVICE="${NEW_DEVICE}"
-		fi
-		;;
-	esac
+               # The NIC is to be configured if this file does not exist.
+               # Ip-Config tries to create this file and when it succeds
+               # creating the file, ipconfig is not run again.
+               for x in /tmp/net-"${DEVICE}".conf /tmp/net-*.conf ; do
+                       [ -e "$x" ] && break 2
+               done
+
+               case ${IP} in
+               none|off)
+                       # Do nothing
+                       ;;
+               ""|on|any)
+                       # Bring up device
+                       ipconfig -t ${ROUNDTTT} "${DEVICE}"
+                       ;;
+               dhcp|bootp|rarp|both)
+                       ipconfig -t ${ROUNDTTT} -c ${IP} -d "${DEVICE}"
+                       ;;
+               *)
+                       ipconfig -t ${ROUNDTTT} -d $IP
+
+                       # grab device entry from ip option
+                       NEW_DEVICE=${IP#*:*:*:*:*:*}
+                       if [ "${NEW_DEVICE}" != "${IP}" ]; then
+                               NEW_DEVICE=${NEW_DEVICE%:*}
+                       else
+                               # wrong parse, possibly only a partial string
+                               NEW_DEVICE=
+                       fi
+                       if [ -n "${NEW_DEVICE}" ]; then
+                               DEVICE="${NEW_DEVICE}"
+                       fi
+                       ;;
+               esac
+       done
 
 	# source ipconfig output
 	if [ -n "${DEVICE}" ]; then
 		# source specific bootdevice
 		. /tmp/net-${DEVICE}.conf
 	else
-		# source any interface as not exaclty specified
+		# source any interface...
+		# ipconfig should have quit after first response
 		. /tmp/net-*.conf
 	fi
 }
+
+
+# Wait for queued kernel/udev events
+wait_for_udev()
+{
+       command -v udevadm >/dev/null 2>&1 || return 0
+       udevadm settle ${1:+--timeout=$1}
+}
+

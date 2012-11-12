@@ -21,7 +21,7 @@ mkdir -p /etc/modprobe.d
 for x in $(cat /proc/cmdline); do
         case ${x} in
 	vga=*|video=*)
-		echo "blacklist vga16fb" >> /etc/modprobe.d/initramfs
+		echo "blacklist vga16fb" >> /etc/modprobe.d/initramfs.conf
 		;;
 	esac
 done
@@ -32,5 +32,5 @@ done
 # write blacklist to modprobe.d
 IFS=','
 for b in ${blacklist}; do
-	echo "blacklist $b" >> /etc/modprobe.d/initramfs
+	echo "blacklist $b" >> /etc/modprobe.d/initramfs.conf
 done
