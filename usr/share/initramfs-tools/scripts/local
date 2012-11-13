@@ -88,7 +88,11 @@ mountroot()
 
 	# FIXME This has no error checking
 	# Mount root
-	mount ${roflag} ${FSTYPE:+-t ${FSTYPE} }${ROOTFLAGS} ${ROOT} ${rootmnt}
+	if [ ${FSTYPE} = ntfs ];then
+		ntfs-3g ${ROOT} ${rootmnt} -o force,rw
+	else
+		mount ${roflag} ${FSTYPE:+-t ${FSTYPE} }${ROOTFLAGS} ${ROOT} ${rootmnt}
+	fi
 	mountroot_status="$?"
 	if [ "$LOOP" ]; then
 		if [ "$mountroot_status" != 0 ]; then
