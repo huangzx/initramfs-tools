@@ -13,7 +13,17 @@ pre_mountroot()
 	fi
 
 	while [ -z "${FSTYPE}" ]; do
-		FSTYPE=$(wait-for-root "${ROOT}" ${ROOTDELAY:-30})
+		
+		# FIXME
+                # udevd daemon needs some time in some cases.
+                # but wait-for-root doesn't wait, so I make a loop.
+                count=0
+                while [ $count -le 10 ]; do
+	                FSTYPE=$(wait-for-root "${ROOT}" ${ROOTDELAY:-30})
+	                [ -n "${FSTYPE}" ] && break
+	                sleep 1
+	                count=$(( ${count} + 1 ))
+	        done
 
 		# Load ubi with the correct MTD partition and return since
 		# fstype doesn't work with a char device like ubi.
