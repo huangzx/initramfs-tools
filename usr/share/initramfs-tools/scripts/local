@@ -76,7 +76,7 @@ mountroot()
 
 	# Get the root filesystem type if not set
 	if [ -z "${ROOTFSTYPE}" ]; then
-		[ -n "${FSTYPE}" ] || FSTYPE=$(blkid -s TYPE -o value "${ROOT}")
+		[ -n "${FSTYPE}" ] || FSTYPE=$(udevadm_wrapper TYPE "${ROOT}")
 		ROOTFSTYPE="${FSTYPE}"
 	else
 		FSTYPE=${ROOTFSTYPE}
@@ -129,7 +129,7 @@ able to reboot again and resume the installation.
 
 		# Get the loop filesystem type if not set
 		if [ -z "${LOOPFSTYPE}" ]; then
-			FSTYPE=$(/sbin/blkid -s TYPE -o value "/host/${LOOP#/}")
+            FSTYPE=$(udevadm_wrapper TYPE "/host/${LOOP#/}")
 		else
 			FSTYPE="${LOOPFSTYPE}"
 		fi

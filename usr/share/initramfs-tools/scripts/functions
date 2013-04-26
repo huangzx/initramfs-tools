@@ -384,6 +384,47 @@ parse_numeric() {
        fi
 }
 
+# Parameters:
+# $1 type, supports: UUID, TYPE, LABEL
+# $2 dev, such as:
+#  /dev/sda1
+#  /dev/disk/by-uuid/73cc21b2-68fd-491d-9602-92221ee0eccb
+#  PATH-TO-IMAGE/root.disk  
+#
+udevadm_wrapper() 
+{   
+    local type ret dev value loop sysdev
+   
+    type="$1"
+    dev="$(readlink -f $2)"
+    
+    if [ -b "$dev" ]; then
+        dev="${dev##*/}"
+        case $dev in
+          # if dev is /dev/sr0, sys path is /sys/block/sr0
+          # if dev is /dev/loop0, sys path is /sys/block/loop0
+          sr?|loop?) sysdev=/sys/block/"$dev" ;;
+          *) sysdev=/sys/block/"${dev%%[[:digit:]]}"/"$dev"
+        esac
+    fi
+
+    if [ -f "$dev" ]; then
+        loop=$(losetup -f)
+        losetup $loop "$dev"
+        sysdev=/sys/block/"${loop##*/}"    
+    fi
+    
+    value="$(udevadm test-builtin blkid "$sysdev" 2>/dev/null |grep "^ID_FS_${type}=")"
+    ret=$?
+    
+    if [ "x$loop" != "x" ]; then
+        losetup $loop 1>/dev/null 2>&1 && losetup -d $loop 
+    fi
+
+    echo "${value##*=}"
+    return $ret
+}
+
 # Parameter: device node to check
 # Echos fstype to stdout
 # Return value: indicates if an fs could be recognized
@@ -392,18 +433,13 @@ get_fstype ()
        local FS FSTYPE FSSIZE RET
        FS="${1}"
 
-       # blkid has a more complete list of file systems,
-       # but fstype is more robust
-       eval $(fstype "${FS}" 2> /dev/null)
-       if [ "$FSTYPE" = "unknown" ] &&  command -v blkid >/dev/null 2>&1 ; then
-               FSTYPE=$(blkid -o value -s TYPE "${FS}")
-       elif [ "$FSTYPE" = "unknown" ] && [ -x /lib/udev/vol_id ]; then
-               FSTYPE=$(/lib/udev/vol_id -t "${FS}" 2> /dev/null)
+       if [ "$FSTYPE" = "unknown" ]; then
+            FSTYPE=$(udevadm_wrapper TYPE "${FS}")
        fi
        RET=$?
 
        if [ -z "${FSTYPE}" ]; then
-               FSTYPE="unknown"
+            FSTYPE="unknown"
        fi
 
        echo "${FSTYPE}"

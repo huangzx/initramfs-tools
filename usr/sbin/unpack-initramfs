@@ -1,0 +1,14 @@
+#!/bin/bash
+#
+
+case x"$1" in
+    -h|x)   
+      echo "unpack-initramfs - Decompress initramfs file."
+      echo "Usage: unpack-initramfs file"
+      exit ;;
+       *) file="$1"
+esac
+
+if [ "x$file" != "x" ]; then
+    cat $file | xz -d |cpio -idu
+fi
